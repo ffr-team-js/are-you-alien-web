@@ -504,9 +504,13 @@ class TalkWatch {
  * Android app: landmark-based head angles are noisier than ML Kit's.
  */
 class LifeSigns {
-  constructor() { this.frames = 0; this.blink = new BlinkWatch(); this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
+  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 1; this.minR = 1; this.blink = new BlinkWatch(); this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
   feed(r) {
     this.frames++;
+    if (r.leftEye != null && r.rightEye != null) { // for ?debug: how far the eyes closed during the scan
+      this.minL = Math.min(this.minL, r.leftEye); this.minR = Math.min(this.minR, r.rightEye);
+      this.eyeLows.push((r.leftEye + r.rightEye) / 2); this.eyeLows.sort((a, b) => a - b); this.eyeLows.length = Math.min(this.eyeLows.length, 3);
+    }
     const blinked = this.blink.add(r.leftEye, r.rightEye, r.fps);
     if (r.smile != null) { this.score.add(r.smile); this.flicker.add(r.smile); }
     if (r.mouthWidth != null) this.width.add(r.mouthWidth);
@@ -524,7 +528,7 @@ class LifeSigns {
   /** One line for the ?debug overlay: how close each sign got. */
   debug() {
     const b = this.blink;
-    return `blink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
+    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.45).toFixed(2)}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
   }
 }
 
