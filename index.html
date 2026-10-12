@@ -951,6 +951,21 @@ async function detectLoop(gen) {
 }
 
 /* ======================= Camera and photo ======================= */
+/**
+ * Chrome on multi-lens phones sometimes opens the ultra-wide lens for facingMode "environment",
+ * which makes a person 1 m away tiny. Camera names are known once access is granted; on Android
+ * the main back lens is normally the lowest-numbered one ("camera2 0, facing back").
+ */
+async function mainBackCamera() {
+  try {
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    const back = cams.filter(d => /back|rear|environment/i.test(d.label));
+    if (back.length < 2) return null;
+    const num = d => { const m = d.label.match(/camera2?\s*(\d+)/i); return m ? +m[1] : 99; };
+    back.sort((a, b) => num(a) - num(b));
+    return back[0].deviceId;
+  } catch (e) { return null; }
+}
 async function startCamera() {
   msg("");
   stopCamera(false);
@@ -960,6 +975,14 @@ async function startCamera() {
   }
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: lensFront ? "user" : "environment", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    if (!lensFront) {
+      const want = await mainBackCamera();
+      const have = stream.getVideoTracks()[0].getSettings().deviceId;
+      if (want && want !== have) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: want }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      }
+    }
     video.srcObject = stream;
     await video.play();
     source = "camera"; result = null; hideResult(); photoFaces = [];
@@ -1189,6 +1212,7 @@ function debugPanel() {
     document.querySelector(".tv").after(dbgBox);
   }
   const lines = [`fps ${fps.toFixed(1)}  faces ${live ? live.faces.length : 0}  video ${video.videoWidth}x${video.videoHeight}`];
+  if (stream) lines.push(`camera: ${stream.getVideoTracks()[0].label || "?"}`);
   const f = live && live.faces[0];
   if (f) lines.push(`score ${f.score.toFixed(2)}  eyes ${f.leftEye.toFixed(2)}/${f.rightEye.toFixed(2)}  yaw ${f.yaw.toFixed(0)}  pitch ${f.pitch.toFixed(0)}  smile ${f.smile == null ? "-" : f.smile.toFixed(2)}  mouth ${f.mouth ? f.mouth.toFixed(2) : "-"}`);
   if (dbg.watch) { lines.push(`last scan: frames ${dbg.frames}  sign ${dbg.sign || "-"}`); lines.push(dbg.watch.debug()); }
