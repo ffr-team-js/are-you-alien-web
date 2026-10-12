@@ -431,29 +431,31 @@ class Flicker {
 /**
  * Blink, measured against the person's own eyes. Openness comes from eyelid geometry
  * (eye aspect ratio), so through glasses or on a statue it's the shape that counts.
- * Lopsided readings are ignored; more than three dips in 40 frames, or eyes disagreeing in
- * over a quarter of frames, means they can't be read. With confidently open eyes one blink
- * of any length counts; otherwise a slow camera needs two.
+ * At 6–8 frames a second a frame rarely lands on fully shut eyes, so a blink counts when both
+ * eyes drop together to below 60% of their usual level. Lopsided readings (one eye "shut" — a
+ * typical glitch on a statue) are ignored; too many dips, or eyes disagreeing in over a quarter
+ * of frames, means they can't be read. With confidently open eyes one blink counts; otherwise
+ * a slow camera needs two. Tolerances are relative to the person's level.
  */
 class BlinkWatch {
   constructor() { Object.assign(this, { history: [], dips: [], frame: 0, dipping: false, seen: 0, lopsided: 0, inClosure: false, closureLen: 0, shutFrames: 0, reopen: 0, level: 0, events: 0, noisy: false, needed: 1 }); }
-  shut(l, r) { return l < this.level * 0.45 && r < this.level * 0.45 && Math.abs(l - r) < 0.15; }
+  shut(l, r) { return l < this.level * 0.6 && r < this.level * 0.6 && Math.abs(l - r) < this.level * 0.25; }
   add(l, r, fps) {
     this.frame++;
     if (l == null || r == null) { this.inClosure = false; return false; }
     const avg = (l + r) / 2;
     this.seen++;
-    if (Math.abs(l - r) > 0.35) this.lopsided++;
+    if (Math.abs(l - r) > Math.max(0.35, this.level * 0.35)) this.lopsided++;
     if (this.seen >= 10 && this.lopsided > this.seen / 4) this.noisy = true;
     if (!this.inClosure) {
       if (this.history.length >= perSec(fps, 0.6, 4)) {
         this.level = [...this.history].sort((a, b) => a - b)[Math.floor(this.history.length * 3 / 4)];
-        const calm = this.history.slice(0, -2).slice(-Math.min(5, perSec(fps, 0.4, 2))).every(v => Math.abs(v - this.level) < 0.12);
-        const down = this.level >= 0.4 && avg < this.level * 0.6;
+        const calm = this.history.slice(0, -2).slice(-Math.min(5, perSec(fps, 0.4, 2))).every(v => Math.abs(v - this.level) < this.level * 0.15);
+        const down = this.level >= 0.4 && avg < this.level * 0.7;
         if (down && !this.dipping) {
           this.dips.push(this.frame);
           while (this.dips.length && this.frame - this.dips[0] > perSec(fps, 2.7, 8)) this.dips.shift();
-          if (this.dips.length > 3) this.noisy = true;
+          if (this.dips.length > 4) this.noisy = true;
         }
         this.dipping = down;
         const quiet = !this.dips.some(d => d >= this.frame - perSec(fps, 1.1, 3) && d <= this.frame - perSec(fps, 0.2, 1));
@@ -462,13 +464,13 @@ class BlinkWatch {
           return false;
         }
       }
-      if (Math.abs(l - r) < 0.2) { this.history.push(avg); if (this.history.length > perSec(fps, 1.4, 8)) this.history.shift(); }
+      if (Math.abs(l - r) < Math.max(0.2, this.level * 0.2)) { this.history.push(avg); if (this.history.length > perSec(fps, 1.4, 8)) this.history.shift(); }
       return false;
     }
     this.closureLen++;
-    this.dipping = avg < this.level * 0.6;
+    this.dipping = avg < this.level * 0.7;
     if (this.shut(l, r)) { this.shutFrames++; this.reopen = 0; }
-    else if (l > this.level * 0.8 && r > this.level * 0.8) {
+    else if (l > this.level * 0.82 && r > this.level * 0.82) {
       this.reopen++;
       if (this.reopen >= 2) {
         this.inClosure = false;
@@ -504,7 +506,7 @@ class TalkWatch {
  * Android app: landmark-based head angles are noisier than ML Kit's.
  */
 class LifeSigns {
-  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 1; this.minR = 1; this.blink = new BlinkWatch(); this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
+  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 9; this.minR = 9; this.blink = new BlinkWatch(); this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
   feed(r) {
     this.frames++;
     if (r.leftEye != null && r.rightEye != null) { // for ?debug: how far the eyes closed during the scan
@@ -528,17 +530,21 @@ class LifeSigns {
   /** One line for the ?debug overlay: how close each sign got. */
   debug() {
     const b = this.blink;
-    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.45).toFixed(2)}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
+    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.6).toFixed(2)}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
   }
 }
 
 /* ======================= Faces from face-api results ======================= */
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mean = pts => ({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length });
-/** Eye openness 0..1 from the eye aspect ratio of six eyelid points (0 shut, 1 normally open). */
+/**
+ * Eye openness from the eye aspect ratio of six eyelid points: about 1 for a typical open eye,
+ * 0 for shut. Not capped at 1 — wide-open eyes read above 1, and a capped scale hid half-closed
+ * eyes during a blink (they still read 1.00). Blinks are judged against each person's own level.
+ */
 function openness(p) {
   const ear = (dist(p[1], p[5]) + dist(p[2], p[4])) / (2 * dist(p[0], p[3]));
-  return Math.max(0, Math.min(1, (ear - 0.12) / 0.14));
+  return Math.max(0, Math.min(2, ear / 0.28));
 }
 /** Everything the checks need about one detected face, in the coordinates of the analysed picture. */
 function toSignal(res) {
