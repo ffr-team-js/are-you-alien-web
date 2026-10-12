@@ -438,20 +438,22 @@ class Flicker {
  * a slow camera needs two. Tolerances are relative to the person's level.
  */
 class BlinkWatch {
-  constructor() { Object.assign(this, { history: [], dips: [], frame: 0, dipping: false, seen: 0, lopsided: 0, inClosure: false, closureLen: 0, shutFrames: 0, reopen: 0, level: 0, events: 0, noisy: false, needed: 1 }); }
+  /** relative: the signal's scale is unknown (eye-image contrast) — only changes against the person's own level count */
+  constructor(relative = false) { this.relative = relative; Object.assign(this, { history: [], dips: [], frame: 0, dipping: false, seen: 0, lopsided: 0, inClosure: false, closureLen: 0, shutFrames: 0, reopen: 0, level: 0, events: 0, noisy: false, needed: 1 }); }
   shut(l, r) { return l < this.level * 0.6 && r < this.level * 0.6 && Math.abs(l - r) < this.level * 0.25; }
   add(l, r, fps) {
     this.frame++;
     if (l == null || r == null) { this.inClosure = false; return false; }
     const avg = (l + r) / 2;
     this.seen++;
-    if (Math.abs(l - r) > Math.max(0.35, this.level * 0.35)) this.lopsided++;
+    if (Math.abs(l - r) > (this.relative ? (this.level || avg) * 0.35 : Math.max(0.35, this.level * 0.35))) this.lopsided++;
     if (this.seen >= 10 && this.lopsided > this.seen / 4) this.noisy = true;
     if (!this.inClosure) {
       if (this.history.length >= perSec(fps, 0.6, 4)) {
         this.level = [...this.history].sort((a, b) => a - b)[Math.floor(this.history.length * 3 / 4)];
         const calm = this.history.slice(0, -2).slice(-Math.min(5, perSec(fps, 0.4, 2))).every(v => Math.abs(v - this.level) < this.level * 0.15);
-        const down = this.level >= 0.4 && avg < this.level * 0.7;
+        const levelOk = this.relative ? this.level > 0.02 : this.level >= 0.4;
+        const down = levelOk && avg < this.level * 0.7;
         if (down && !this.dipping) {
           this.dips.push(this.frame);
           while (this.dips.length && this.frame - this.dips[0] > perSec(fps, 2.7, 8)) this.dips.shift();
@@ -459,12 +461,13 @@ class BlinkWatch {
         }
         this.dipping = down;
         const quiet = !this.dips.some(d => d >= this.frame - perSec(fps, 1.1, 3) && d <= this.frame - perSec(fps, 0.2, 1));
-        if (this.level >= 0.4 && calm && quiet && !this.noisy && this.shut(l, r)) {
+        if (levelOk && calm && quiet && !this.noisy && this.shut(l, r)) {
           this.inClosure = true; this.closureLen = 1; this.shutFrames = 1; this.reopen = 0;
           return false;
         }
       }
-      if (Math.abs(l - r) < Math.max(0.2, this.level * 0.2)) { this.history.push(avg); if (this.history.length > perSec(fps, 1.4, 8)) this.history.shift(); }
+      const agree = this.relative ? Math.abs(l - r) < (this.level || avg) * 0.2 : Math.abs(l - r) < Math.max(0.2, this.level * 0.2);
+      if (agree) { this.history.push(avg); if (this.history.length > perSec(fps, 1.4, 8)) this.history.shift(); }
       return false;
     }
     this.closureLen++;
@@ -475,7 +478,7 @@ class BlinkWatch {
       if (this.reopen >= 2) {
         this.inClosure = false;
         if (this.noisy) return false;
-        const confident = this.level >= 0.85;
+        const confident = this.relative || this.level >= 0.85;
         this.needed = (confident || fps >= 12) ? 1 : 2;
         if (confident || this.shutFrames >= (fps >= 12 ? 2 : 1)) this.events++;
         return this.events >= this.needed;
@@ -506,14 +509,19 @@ class TalkWatch {
  * Android app: landmark-based head angles are noisier than ML Kit's.
  */
 class LifeSigns {
-  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 9; this.minR = 9; this.blink = new BlinkWatch(); this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
+  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 9; this.minR = 9; this.blink = new BlinkWatch(); this.blinkC = new BlinkWatch(true); this.cLows = []; this.cMinL = 9; this.cMinR = 9; this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
   feed(r) {
     this.frames++;
     if (r.leftEye != null && r.rightEye != null) { // for ?debug: how far the eyes closed during the scan
       this.minL = Math.min(this.minL, r.leftEye); this.minR = Math.min(this.minR, r.rightEye);
       this.eyeLows.push((r.leftEye + r.rightEye) / 2); this.eyeLows.sort((a, b) => a - b); this.eyeLows.length = Math.min(this.eyeLows.length, 3);
     }
-    const blinked = this.blink.add(r.leftEye, r.rightEye, r.fps);
+    if (r.leftC != null && r.rightC != null) { // for ?debug
+      this.cMinL = Math.min(this.cMinL, r.leftC); this.cMinR = Math.min(this.cMinR, r.rightC);
+      this.cLows.push((r.leftC + r.rightC) / 2); this.cLows.sort((a, b) => a - b); this.cLows.length = Math.min(this.cLows.length, 3);
+    }
+    const blinked = this.blink.add(r.leftEye, r.rightEye, r.fps) |
+      (r.leftC != null && r.rightC != null ? this.blinkC.add(r.leftC, r.rightC, r.fps) : false);
     if (r.smile != null) { this.score.add(r.smile); this.flicker.add(r.smile); }
     if (r.mouthWidth != null) this.width.add(r.mouthWidth);
     const talking = r.mouth != null ? this.talk.add(r.mouth, r.fps) : false;
@@ -530,7 +538,8 @@ class LifeSigns {
   /** One line for the ?debug overlay: how close each sign got. */
   debug() {
     const b = this.blink;
-    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.6).toFixed(2)}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
+    const c = this.blinkC;
+    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.6).toFixed(2)}\nimage: lvl ${c.level.toFixed(3)} min L ${this.cMinL.toFixed(3)} R ${this.cMinR.toFixed(3)} · lowest ${this.cLows.map(v => v.toFixed(3)).join(" ")} · shut below ${(c.level * 0.6).toFixed(3)} · blinks ${c.events}${c.noisy ? " NOISY" : ""}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
   }
 }
 
@@ -545,6 +554,23 @@ const mean = pts => ({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.
 function openness(p) {
   const ear = (dist(p[1], p[5]) + dist(p[2], p[4])) / (2 * dist(p[0], p[3]));
   return Math.max(0, Math.min(2, ear / 0.28));
+}
+/**
+ * Eye-image contrast: an open eye has white sclera next to a dark iris and pupil, a shut eye is
+ * an even eyelid. face-api's eyelid points hardly move when a person blinks (they keep drawing an
+ * open eye), but this contrast drops sharply. Coefficient of variation of brightness in a box
+ * around the eye centre, so it doesn't change with exposure.
+ */
+function eyeContrast(ctx, c, w) {
+  const hw = Math.max(3, w * 0.35), hh = Math.max(2, w * 0.22);
+  const x0 = Math.max(0, Math.round(c.x - hw)), y0 = Math.max(0, Math.round(c.y - hh));
+  const bw = Math.min(ctx.canvas.width - x0, Math.round(hw * 2)), bh = Math.min(ctx.canvas.height - y0, Math.round(hh * 2));
+  if (bw < 4 || bh < 3) return null;
+  const d = ctx.getImageData(x0, y0, bw, bh).data;
+  let n = 0, s = 0, s2 = 0;
+  for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; s += l; s2 += l * l; n++; }
+  const m = s / n;
+  return Math.sqrt(Math.max(0, s2 / n - m * m)) / (m + 10);
 }
 /** Everything the checks need about one detected face, in the coordinates of the analysed picture. */
 function toSignal(res) {
@@ -561,6 +587,8 @@ function toSignal(res) {
     score: res.detection.score,
     leftEyeC: lc, rightEyeC: rc,
     leftEye: openness(le), rightEye: openness(re),
+    eyeWL: dist(p[36], p[39]), eyeWR: dist(p[42], p[45]),
+    leftC: null, rightC: null, // eye-image contrast, filled in by the camera loop
     smile: res.expressions ? res.expressions.happy : null,
     mouth: eyes > 1 ? dist(p[33], p[57]) / eyes : null,
     mouthWidth: eyes > 1 ? dist(p[48], p[54]) / eyes : null,
@@ -936,11 +964,16 @@ async function detectFaces(input, kind, withExpressions = true) {
 const nextPaint = () => new Promise(r => requestAnimationFrame(() => r()));
 async function detectLoop(gen) {
   let prev = [], last = 0, n = 0;
+  // the frame is copied once: landmarks and the eye images then come from exactly the same picture
+  const fc = document.createElement("canvas"), fctx = fc.getContext("2d", { willReadFrequently: true });
   while (gen === camGen && stream && source === "camera") {
     if (modelReady && video.readyState >= 2 && video.videoWidth) {
       try {
         const withExpr = n++ % 3 === 0;
-        const faces = await detectFaces(video, lensFront ? "near" : "far", withExpr);
+        if (fc.width !== video.videoWidth || fc.height !== video.videoHeight) { fc.width = video.videoWidth; fc.height = video.videoHeight; }
+        fctx.drawImage(video, 0, 0, fc.width, fc.height);
+        const faces = await detectFaces(fc, lensFront ? "near" : "far", withExpr);
+        for (const f of faces) { f.leftC = eyeContrast(fctx, f.leftEyeC, f.eyeWL); f.rightC = eyeContrast(fctx, f.rightEyeC, f.eyeWR); }
         assignIds(prev, faces);
         // keep the last smile score of the same face on frames without the expression model
         if (!withExpr) for (const f of faces) { const p = prev.find(q => q.id === f.id); f.smile = p ? p.smile : null; }
