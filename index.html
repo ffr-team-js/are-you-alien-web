@@ -132,6 +132,7 @@ main{max-width:620px;margin:0 auto}
 .rows{margin:2px 0 10px;border-top:1px solid rgba(232,246,255,.25)}
 .rows div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(232,246,255,.12);font-size:13px}
 .joke{font-style:italic;font-size:14px;color:rgba(232,246,255,.85);margin:0 0 12px}
+.consent{margin:10px 0 0;font-size:12px;line-height:1.4;color:rgba(232,246,255,.6)}
 .ractions{display:flex;flex-wrap:wrap;gap:10px;position:relative}
 .sharemenu{position:absolute;left:0;bottom:46px;background:var(--paper);color:var(--ink);border:1px solid var(--line);min-width:200px;padding:6px 0;box-shadow:6px 6px 0 rgba(0,0,0,.25)}
 .sharemenu[hidden]{display:none}
@@ -1248,7 +1249,8 @@ function showResult() {
         <button role="menuitem" id="saveImg">Save image</button>
         ${navigator.share ? `<button role="menuitem" id="sendImg">Send</button>` : ""}
       </div>` : ""}
-    </div>`;
+    </div>
+    ${r.verdict === "HUMAN" && r.shot ? `<p class="consent">Before saving a certificate, make sure everyone in the photo is happy to be on it.</p>` : ""}`;
   $("#result").hidden = false;
   $("#again").onclick = e => { e.stopPropagation(); startScan(); };
   if ($("#cert")) $("#cert").onclick = e => { e.stopPropagation(); saveCertificate(); };
@@ -1369,6 +1371,8 @@ async function sendReport() {
  * leaves the device. This is the PREVIEW: a watermark, a placeholder number and a placeholder
  * for the verification QR code. The paid version will get a real number from the server.
  */
+/** Certificate number as printed: EA- (Earthling Affairs) and six digits, e.g. EA-012345. */
+const certNumber = n => "EA-" + String(n).padStart(6, "0");
 const CERT = { w: 2480, h: 3508, paper: "#F4ECD6", ink: "#23201A", muted: "#6B5F45", stamp: "#B0321F", preview: true };
 /**
  * The part of the scan picture to print: everyone in it, with room around the faces, grown towards
@@ -1384,9 +1388,25 @@ function certCrop(r) {
   x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W0, x1); y1 = Math.min(H0, y1);
   let cw = x1 - x0, ch = y1 - y0;
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-  if (cw / ch > 0.8) ch = Math.min(H0, cw / 0.8); else cw = Math.min(W0, ch * 0.8);
+  // one person: a 4:5 portrait; a group: as wide as the group is, up to 1.6:1 (the frame follows the photo)
+  const target = r.boxes.length > 1 ? Math.min(1.6, Math.max(0.8, cw / ch)) : 0.8;
+  if (cw / ch > target) ch = Math.min(H0, cw / target); else cw = Math.min(W0, ch * target);
   const x = Math.max(0, Math.min(W0 - cw, cx - cw / 2)), y = Math.max(0, Math.min(H0 - ch, cy - ch / 2));
   return { x, y, w: cw, h: ch };
+}
+/** A small detector screen with the honest sign-off: verified by a machine, inspected by an algorithm. */
+function drawReadout(g, MONO) {
+  const x = 240, y = 2960, w = 900, h = 230;
+  g.save();
+  g.fillStyle = "#0A0E0D"; g.beginPath(); g.roundRect(x, y, w, h, 26); g.fill();
+  g.fillStyle = "rgba(0,0,0,.35)"; for (let yy = y + 4; yy < y + h; yy += 6) g.fillRect(x, yy, w, 2);
+  g.font = `36px ${MONO}`; g.textBaseline = "middle";
+  g.fillStyle = "#7DFFB0"; g.fillText("> VERIFIED BY: HUMANOID DETECTOR v1.1", x + 36, y + 80);
+  g.fillStyle = "#DFF6FF"; g.fillText("> INSPECTOR ON DUTY: AN ALGORITHM", x + 36, y + 150);
+  const cw = g.measureText("> INSPECTOR ON DUTY: AN ALGORITHM").width;
+  g.fillStyle = "#7DFFB0"; g.fillRect(x + 36 + cw + 10, y + 132, 20, 38); // the cursor
+  g.restore();
+  g.textBaseline = "alphabetic";
 }
 function centerText(g, t, x, y, font, color) { g.font = font; g.fillStyle = color; g.textAlign = "center"; g.fillText(t, x, y); g.textAlign = "left"; }
 async function renderCertificate(r) {
@@ -1405,16 +1425,22 @@ async function renderCertificate(r) {
   g.strokeStyle = ink; g.lineWidth = 12; g.strokeRect(90, 90, W2 - 180, H2 - 180);
   g.lineWidth = 3; g.strokeRect(130, 130, W2 - 260, H2 - 260);
   // the alien emblem
-  g.save(); g.translate(W2 / 2 - 70, 200); g.scale(140 / 32, 140 / 32);
+  g.save(); g.translate(W2 / 2 - 91, 185); g.scale(182 / 32, 182 / 32);
   g.fillStyle = ink; g.fill(new Path2D("M16,3C24,3 29,9 28,16C27,23 21,29 16,29C11,29 5,23 4,16C3,9 8,3 16,3Z M7.2,13.6C9,12.6 13.4,14.8 14.2,17.4C12.4,18.2 8,16.2 7.2,13.6Z M24.8,13.6C23,12.6 18.6,14.8 17.8,17.4C19.6,18.2 24,16.2 24.8,13.6Z"), "evenodd");
   g.restore();
+  // the photo frame takes the photo's shape: a 4:5 portrait for one person, wider for a group,
+  // always inside a 1900 x 1550 area under the title
+  const crop = certCrop(r), aspect = crop.w / crop.h;
+  const pw = Math.round(Math.min(1900, 1550 * aspect)), ph = Math.round(pw / aspect);
+  // a shorter (group) photo leaves room: the title moves down a little, away from the emblem,
+  // and the photo is centred in what's left
+  const off = Math.min(80, (1550 - ph) / 4);
+  const px = (W2 - pw) / 2, py = 820 + off + (1550 - off - ph) / 2;
   // title
-  centerText(g, "CERTIFICATE", W2 / 2, 520, `900 150px ${HEAD}`, ink);
-  centerText(g, "OF EARTHLING", W2 / 2, 650, `900 110px ${HEAD}`, ink);
-  centerText(g, "issued by the Humanoid Detector · device accuracy 95%", W2 / 2, 740, `46px ${MONO}`, muted);
+  centerText(g, "CERTIFICATE", W2 / 2, 520 + off, `900 150px ${HEAD}`, ink);
+  centerText(g, "OF EARTHLING", W2 / 2, 650 + off, `900 110px ${HEAD}`, ink);
+  centerText(g, "issued by the Humanoid Detector · device accuracy 95%", W2 / 2, 740 + off, `46px ${MONO}`, muted);
   // photo, 4:5, with the detector's corner brackets around each face
-  const px = (W2 - 1240) / 2, py = 820, pw = 1240, ph = 1550;
-  const crop = certCrop(r);
   g.fillStyle = "#0A0E0D"; g.fillRect(px, py, pw, ph);
   // fit the crop inside the frame; a wide group gets dark bands above and below, like the detector screen
   const k = Math.min(pw / crop.w, ph / crop.h), dw = crop.w * k, dh = crop.h * k;
@@ -1446,18 +1472,12 @@ async function renderCertificate(r) {
   });
   g.strokeStyle = "rgba(35,32,26,.35)"; g.lineWidth = 3;
   g.beginPath(); g.moveTo(240, 2900); g.lineTo(W2 - 240, 2900); g.stroke();
-  // signature (a scribble) bottom left
-  g.save(); g.strokeStyle = ink; g.lineWidth = 6; g.lineCap = "round"; g.lineJoin = "round";
-  g.beginPath(); g.moveTo(260, 3110);
-  g.bezierCurveTo(300, 3000, 360, 3010, 360, 3080); g.bezierCurveTo(360, 3140, 300, 3140, 330, 3070);
-  g.bezierCurveTo(370, 2990, 430, 3150, 470, 3060); g.bezierCurveTo(500, 3000, 530, 3120, 580, 3060);
-  g.bezierCurveTo(610, 3030, 640, 3090, 700, 3070); g.bezierCurveTo(760, 3050, 800, 3080, 860, 3060);
-  g.stroke(); g.restore();
-  g.strokeStyle = ink; g.lineWidth = 3; g.beginPath(); g.moveTo(240, 3160); g.lineTo(980, 3160); g.stroke();
-  g.font = `40px ${MONO}`; g.fillStyle = muted; g.fillText("Chief Humanoid Inspector", 240, 3220);
+  // bottom left: no made-up signature — the certificate is issued by a machine, and says so
+  drawReadout(g, MONO);
   // number and the place for the verification QR code, bottom right
   g.textAlign = "right"; g.fillStyle = muted; g.font = `36px ${MONO}`; g.fillText("EARTHLING No.", W2 - 560, 3020);
-  g.fillStyle = ink; g.font = `900 72px ${HEAD}`; g.fillText(CERT.preview ? "PREVIEW" : String(r.number), W2 - 560, 3110);
+  // the preview shows the format with zeros; the real number comes from the server after payment
+  g.fillStyle = ink; g.font = `900 72px ${HEAD}`; g.fillText(certNumber(CERT.preview ? 0 : r.number), W2 - 560, 3110);
   g.textAlign = "left";
   g.setLineDash([16, 12]); g.strokeStyle = muted; g.lineWidth = 4; g.strokeRect(W2 - 520, 2950, 280, 280); g.setLineDash([]);
   centerText(g, "QR", W2 - 380, 3080, `700 64px ${HEAD}`, muted);
@@ -1466,7 +1486,10 @@ async function renderCertificate(r) {
   centerText(g, "Any two people on Earth share about 99.9% of their DNA.", W2 / 2, 3275, `40px ${MONO}`, muted);
   centerText(g, "Are You Alien? · humanoid detector · for fun only", W2 / 2, 3335, `34px ${MONO}`, muted);
   // the red stamp, over the photo's lower right corner
-  g.save(); g.translate(px + pw - 140, py + ph - 230); g.rotate(-12 * Math.PI / 180);
+  // over the photo's bottom edge, clear of the text below and inside the page margins; on a short
+  // (group) photo it sits mostly on the frame edge so it doesn't cover anyone
+  const sx = Math.min(px + pw - 140, W2 - 660), sy = Math.min(py + ph - 30, 2140);
+  g.save(); g.translate(sx, sy); g.rotate(-12 * Math.PI / 180);
   g.globalAlpha = 0.88; g.strokeStyle = stamp; g.fillStyle = stamp; g.lineWidth = 14;
   g.beginPath(); g.roundRect(-430, -150, 860, 300, 30); g.stroke();
   g.lineWidth = 4; g.beginPath(); g.roundRect(-400, -122, 800, 244, 20); g.stroke();
@@ -1488,7 +1511,7 @@ async function saveCertificate() {
     const pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     pdf.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 210, 297);
     const blob = pdf.output("blob");
-    const filename = `earthling_certificate_${CERT.preview ? "preview" : result.number}.pdf`;
+    const filename = `earthling_certificate_${CERT.preview ? "preview" : certNumber(result.number)}.pdf`;
     const d = await downloads;
     if (d) {
       try { await d.save({ filename, data: blob }); toast("Certificate saved"); return; }
