@@ -837,6 +837,8 @@ async function loadModels() {
     try { await tf.setBackend("webgl"); await tf.ready(); } catch (e) { await tf.setBackend("cpu"); await tf.ready(); }
     const nets = [[faceapi.nets.tinyFaceDetector, MODELS.tiny], [faceapi.nets.faceLandmark68Net, MODELS.landmarks], [faceapi.nets.faceExpressionNet, MODELS.expressions]];
     for (const [net, m] of nets) await net.loadFromWeightMap(tf.io.decodeWeights(b64ToBuf(m.b64), m.specs));
+    setStatus("#detDot", "#detTxt", "wait", "warming up");
+    await warmUp();
     modelReady = true;
     setStatus("#detDot", "#detTxt", "ok", "ready");
   } catch (e) {
@@ -846,6 +848,19 @@ async function loadModels() {
     msg("The face detector couldn’t start in this browser. Reload the page, or try a recent Chrome, Safari or Firefox.");
   }
   updateUI();
+}
+/**
+ * TensorFlow.js prepares its GPU programs on the first run of each network and input size, which
+ * freezes the page for a second or more. Doing that once on a blank picture, right after loading,
+ * moves the freeze away from the moment the camera picture appears.
+ */
+async function warmUp() {
+  const c = document.createElement("canvas"); c.width = 160; c.height = 160;
+  const g = c.getContext("2d"); g.fillStyle = "#8a7a6a"; g.fillRect(0, 0, 160, 160);
+  await new Promise(r => setTimeout(r, 50)); // let the first screen paint first
+  for (const size of [320, 416]) await faceapi.detectAllFaces(c, new faceapi.TinyFaceDetectorOptions({ inputSize: size, scoreThreshold: 0.45 }));
+  await faceapi.nets.faceLandmark68Net.detectLandmarks(c);
+  await faceapi.nets.faceExpressionNet.predictExpressions(c);
 }
 /** Main camera: people stand 2–3 m away, so a bigger input finds small faces; selfie faces are big. */
 function detectorOptions(kind) {
@@ -896,6 +911,9 @@ async function mainBackCamera() {
     return back[0].deviceId;
   } catch (e) { return null; }
 }
+/** The main back camera's id, kept in this browser so the next start opens it directly. */
+function rememberedCamera() { try { return localStorage.getItem("aya.backCamera"); } catch (e) { return null; } }
+function rememberCamera(id) { try { id ? localStorage.setItem("aya.backCamera", id) : localStorage.removeItem("aya.backCamera"); } catch (e) {} }
 async function startCamera() {
   msg("");
   stopCamera(false);
@@ -904,13 +922,24 @@ async function startCamera() {
     return;
   }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: lensFront ? "user" : "environment", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
-    if (!lensFront) {
-      const want = await mainBackCamera();
-      const have = stream.getVideoTracks()[0].getSettings().deviceId;
-      if (want && want !== have) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: want }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    const size = { width: { ideal: 640 }, height: { ideal: 480 } };
+    stream = null;
+    // the main back lens found last time on this device: open it straight away
+    const saved = lensFront ? null : rememberedCamera();
+    if (saved) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: saved }, ...size }, audio: false }); }
+      catch (e) { if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) throw e; rememberCamera(null); }
+    }
+    if (!stream) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: lensFront ? "user" : "environment", ...size }, audio: false });
+      if (!lensFront) {
+        const want = await mainBackCamera();
+        const have = stream.getVideoTracks()[0].getSettings().deviceId;
+        if (want && want !== have) {
+          stream.getTracks().forEach(t => t.stop());
+          stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: want }, ...size }, audio: false });
+        }
+        rememberCamera(stream.getVideoTracks()[0].getSettings().deviceId || want);
       }
     }
     video.srcObject = stream;
@@ -1049,7 +1078,21 @@ function digits() {
   });
   ctx.restore();
 }
-function scanlines(a) { ctx.save(); ctx.fillStyle = `rgba(0,0,0,${0.5 * a})`; for (let y = 0; y < H; y += 3 * DPR) ctx.fillRect(0, y, W, DPR); ctx.restore(); }
+/** Still layers (scanlines, dark corners) are drawn once for the current screen size and reused. */
+const layers = { w: 0, h: 0, lines: document.createElement("canvas"), vignette: document.createElement("canvas") };
+function stillLayers() {
+  if (layers.w === W && layers.h === H) return layers;
+  layers.w = W; layers.h = H;
+  for (const c of [layers.lines, layers.vignette]) { c.width = W; c.height = H; }
+  const lg = layers.lines.getContext("2d");
+  lg.fillStyle = "rgba(0,0,0,.5)"; for (let y = 0; y < H; y += 3 * DPR) lg.fillRect(0, y, W, DPR);
+  const vgc = layers.vignette.getContext("2d");
+  const vg = vgc.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.65)");
+  vgc.fillStyle = vg; vgc.fillRect(0, 0, W, H);
+  return layers;
+}
+function scanlines(a) { ctx.save(); ctx.globalAlpha = a; ctx.drawImage(stillLayers().lines, 0, 0); ctx.restore(); }
 function rollBar(t, strong) {
   const period = strong ? 1100 : 3600, y = (t % period) / period * H * 1.3 - H * 0.15, bh = 46 * DPR;
   const g = ctx.createLinearGradient(0, y - bh, 0, y + bh);
@@ -1126,9 +1169,7 @@ function frame(t) {
       : f.lock === "TOO_FAR" ? ["MOVE CLOSER", "#ffb54d", false] : ["AIM THE FRAME AT A FACE", "#dff6ff", false];
     if (steady || Math.floor(t / 700) % 2 === 0) { ctx.textBaseline = "top"; text(label, 14 * DPR, 14 * DPR, 12, col); ctx.textBaseline = "alphabetic"; }
   }
-  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.75);
-  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.65)");
-  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(stillLayers().vignette, 0, 0);
   requestAnimationFrame(frame);
 }
 
