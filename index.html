@@ -132,7 +132,7 @@ main{max-width:620px;margin:0 auto}
 .rows{margin:2px 0 10px;border-top:1px solid rgba(232,246,255,.25)}
 .rows div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(232,246,255,.12);font-size:13px}
 .joke{font-style:italic;font-size:14px;color:rgba(232,246,255,.85);margin:0 0 12px}
-.ractions{display:flex;gap:10px;position:relative}
+.ractions{display:flex;flex-wrap:wrap;gap:10px;position:relative}
 .sharemenu{position:absolute;left:0;bottom:46px;background:var(--paper);color:var(--ink);border:1px solid var(--line);min-width:200px;padding:6px 0;box-shadow:6px 6px 0 rgba(0,0,0,.25)}
 .sharemenu[hidden]{display:none}
 .sharemenu button{display:block;width:100%;text-align:left;padding:10px 16px;font-size:15px}
@@ -245,6 +245,7 @@ main{max-width:620px;margin:0 auto}
 <div class="toast" id="toast" hidden role="status"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 "use strict";
 /* Embedded data, filled in at build time: face-api model weights and the case-file portraits. */
@@ -631,9 +632,11 @@ function linesOf(r) {
     if (r.weak) out.push([r.calmLine, C.UNKNOWN]);
     if (m.nordic > 0) out.push([`Traces of Nordic origin detected: ${Traits.format(m.nordic)}. Fair hair and blue eyes are hard to hide.`, C.NORDIC]);
     if (m.grey > 0) out.push([`Signs of Greys detected: ${Traits.format(m.grey)}. Then again, maybe the subject just didn’t take off their sunglasses.`, C.GREY]);
-    if (r.faces > 1) out.push([`People in the frame: ${r.faces}. All of them Earthlings.`, C.INK]);
+    if (r.faces > 1) out.push([`Different faces, same species: ${r.faces} people in the frame, 100% Earthlings, all of them.`, C.INK]);
     if (r.statues > 0) out.push([`Also in the frame: ${r.statues} ${plural(r.statues, "marble statue", "marble statues")}. A face but no pulse — not people and not aliens, just Ancient Rome.`, C.GREY]);
     const bg = background(r); if (bg) out.push(bg);
+    // a real fact under the joke percentages
+    out.push(["Fun fact: any two people on Earth share about 99.9% of their DNA. The device has yet to find an exception.", C.DIM]);
   } else if (r.verdict === "STATUE") {
     out.push(["The subject looks human, but it isn’t breathing and appears to be made of marble. Not a human and not a known alien species — a work of art.", C.INK]);
     out.push(["If this is just a black-and-white photo, the device apologises: without colour it can’t tell skin from marble.", C.DIM]);
@@ -1239,6 +1242,7 @@ function showResult() {
     ${r.joke ? `<p class="joke">${esc(r.joke)}</p>` : ""}
     <div class="ractions">
       <button class="outline" id="again">Again</button>
+      ${r.verdict === "HUMAN" && r.shot ? `<button class="outline" id="cert">Certificate</button>` : ""}
       ${canShare ? `<button class="outline" id="share" aria-haspopup="true">Share</button>
       <div class="sharemenu" id="shareMenu" hidden role="menu">
         <button role="menuitem" id="saveImg">Save image</button>
@@ -1247,6 +1251,7 @@ function showResult() {
     </div>`;
   $("#result").hidden = false;
   $("#again").onclick = e => { e.stopPropagation(); startScan(); };
+  if ($("#cert")) $("#cert").onclick = e => { e.stopPropagation(); saveCertificate(); };
   if (canShare) {
     $("#share").onclick = e => { e.stopPropagation(); $("#shareMenu").hidden = !$("#shareMenu").hidden; };
     $("#saveImg").onclick = e => { e.stopPropagation(); $("#shareMenu").hidden = true; saveReport(); };
@@ -1356,6 +1361,143 @@ async function sendReport() {
     if (e && e.name === "AbortError") return;
     toast("Sending isn’t available here — use “Save image” instead");
   }
+}
+
+/* ======================= Certificate of Earthling (preview) ======================= */
+/**
+ * An A4 certificate at 300 dpi, drawn in the browser from the scan picture — the photo never
+ * leaves the device. This is the PREVIEW: a watermark, a placeholder number and a placeholder
+ * for the verification QR code. The paid version will get a real number from the server.
+ */
+const CERT = { w: 2480, h: 3508, paper: "#F4ECD6", ink: "#23201A", muted: "#6B5F45", stamp: "#B0321F", preview: true };
+/**
+ * The part of the scan picture to print: everyone in it, with room around the faces, grown towards
+ * a 4:5 portrait where the picture allows. A wide group stays wide (it's letterboxed when drawn):
+ * cutting people off would defeat the purpose.
+ */
+function certCrop(r) {
+  const sh = r.shot, W0 = sh.width, H0 = sh.height;
+  if (!r.boxes.length) return { x: 0, y: 0, w: W0, h: H0 };
+  const big = Math.max(...r.boxes.map(b => Math.max(b.w, b.h)));
+  let x0 = Math.min(...r.boxes.map(b => b.x)) - big * 0.9, x1 = Math.max(...r.boxes.map(b => b.x + b.w)) + big * 0.9;
+  let y0 = Math.min(...r.boxes.map(b => b.y)) - big * 0.7, y1 = Math.max(...r.boxes.map(b => b.y + b.h)) + big * 1.4;
+  x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W0, x1); y1 = Math.min(H0, y1);
+  let cw = x1 - x0, ch = y1 - y0;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  if (cw / ch > 0.8) ch = Math.min(H0, cw / 0.8); else cw = Math.min(W0, ch * 0.8);
+  const x = Math.max(0, Math.min(W0 - cw, cx - cw / 2)), y = Math.max(0, Math.min(H0 - ch, cy - ch / 2));
+  return { x, y, w: cw, h: ch };
+}
+function centerText(g, t, x, y, font, color) { g.font = font; g.fillStyle = color; g.textAlign = "center"; g.fillText(t, x, y); g.textAlign = "left"; }
+async function renderCertificate(r) {
+  await document.fonts.ready;
+  const { w: W2, h: H2, paper, ink, muted, stamp } = CERT;
+  const c = document.createElement("canvas"); c.width = W2; c.height = H2;
+  const g = c.getContext("2d");
+  const HEAD = 'Unbounded, "Arial Black", sans-serif', MONO = '"PT Mono", monospace';
+  const group = r.faces > 1;
+  // paper with a soft darker edge
+  g.fillStyle = paper; g.fillRect(0, 0, W2, H2);
+  const edge = g.createRadialGradient(W2 / 2, H2 / 2, H2 * 0.35, W2 / 2, H2 / 2, H2 * 0.75);
+  edge.addColorStop(0, "rgba(120,95,50,0)"); edge.addColorStop(1, "rgba(120,95,50,.18)");
+  g.fillStyle = edge; g.fillRect(0, 0, W2, H2);
+  // frame: heavy outer line, thin inner line
+  g.strokeStyle = ink; g.lineWidth = 12; g.strokeRect(90, 90, W2 - 180, H2 - 180);
+  g.lineWidth = 3; g.strokeRect(130, 130, W2 - 260, H2 - 260);
+  // the alien emblem
+  g.save(); g.translate(W2 / 2 - 70, 200); g.scale(140 / 32, 140 / 32);
+  g.fillStyle = ink; g.fill(new Path2D("M16,3C24,3 29,9 28,16C27,23 21,29 16,29C11,29 5,23 4,16C3,9 8,3 16,3Z M7.2,13.6C9,12.6 13.4,14.8 14.2,17.4C12.4,18.2 8,16.2 7.2,13.6Z M24.8,13.6C23,12.6 18.6,14.8 17.8,17.4C19.6,18.2 24,16.2 24.8,13.6Z"), "evenodd");
+  g.restore();
+  // title
+  centerText(g, "CERTIFICATE", W2 / 2, 520, `900 150px ${HEAD}`, ink);
+  centerText(g, "OF EARTHLING", W2 / 2, 650, `900 110px ${HEAD}`, ink);
+  centerText(g, "issued by the Humanoid Detector · device accuracy 95%", W2 / 2, 740, `46px ${MONO}`, muted);
+  // photo, 4:5, with the detector's corner brackets around each face
+  const px = (W2 - 1240) / 2, py = 820, pw = 1240, ph = 1550;
+  const crop = certCrop(r);
+  g.fillStyle = "#0A0E0D"; g.fillRect(px, py, pw, ph);
+  // fit the crop inside the frame; a wide group gets dark bands above and below, like the detector screen
+  const k = Math.min(pw / crop.w, ph / crop.h), dw = crop.w * k, dh = crop.h * k;
+  const ox = px + (pw - dw) / 2, oy = py + (ph - dh) / 2;
+  g.drawImage(r.shot, crop.x, crop.y, crop.w, crop.h, ox, oy, dw, dh);
+  g.fillStyle = "rgba(0,0,0,.10)"; for (let y = py; y < py + ph; y += 6) g.fillRect(px, y, pw, 2);
+  g.strokeStyle = "#EAFAFF"; g.lineWidth = 8; g.lineCap = "round";
+  r.boxes.forEach(b => {
+    const x = ox + (b.x - crop.x) * k, y = oy + (b.y - crop.y) * k, w = b.w * k, h = b.h * k, l = Math.min(w, h) * 0.22;
+    if (x < px || y < py || x + w > px + pw || y + h > py + ph) return;
+    g.beginPath();
+    g.moveTo(x, y + l); g.lineTo(x, y); g.lineTo(x + l, y); g.moveTo(x + w - l, y); g.lineTo(x + w, y); g.lineTo(x + w, y + l);
+    g.moveTo(x + w, y + h - l); g.lineTo(x + w, y + h); g.lineTo(x + w - l, y + h); g.moveTo(x + l, y + h); g.lineTo(x, y + h); g.lineTo(x, y + h - l);
+    g.stroke();
+  });
+  g.strokeStyle = ink; g.lineWidth = 10; g.strokeRect(px, py, pw, ph);
+  // the statement
+  const l1 = group ? `These ${r.faces} people are` : "This is to certify that the bearer";
+  const l2 = group ? "100% genuine Earthlings." : "of this face is a 100% genuine Earthling.";
+  centerText(g, l1, W2 / 2, 2510, `64px ${MONO}`, ink);
+  centerText(g, l2, W2 / 2, 2600, `64px ${MONO}`, ink);
+  // three facts
+  const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const cols = [["MATCH WITH HOMO SAPIENS", Traits.format(r.match.human)], ["ALIENS FOUND", "0"], ["INSPECTED", dateStr]];
+  cols.forEach(([label, val], i) => {
+    const x = W2 / 2 + (i - 1) * 720;
+    centerText(g, label, x, 2740, `36px ${MONO}`, muted);
+    centerText(g, val, x, 2830, `700 66px ${HEAD}`, ink);
+  });
+  g.strokeStyle = "rgba(35,32,26,.35)"; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(240, 2900); g.lineTo(W2 - 240, 2900); g.stroke();
+  // signature (a scribble) bottom left
+  g.save(); g.strokeStyle = ink; g.lineWidth = 6; g.lineCap = "round"; g.lineJoin = "round";
+  g.beginPath(); g.moveTo(260, 3110);
+  g.bezierCurveTo(300, 3000, 360, 3010, 360, 3080); g.bezierCurveTo(360, 3140, 300, 3140, 330, 3070);
+  g.bezierCurveTo(370, 2990, 430, 3150, 470, 3060); g.bezierCurveTo(500, 3000, 530, 3120, 580, 3060);
+  g.bezierCurveTo(610, 3030, 640, 3090, 700, 3070); g.bezierCurveTo(760, 3050, 800, 3080, 860, 3060);
+  g.stroke(); g.restore();
+  g.strokeStyle = ink; g.lineWidth = 3; g.beginPath(); g.moveTo(240, 3160); g.lineTo(980, 3160); g.stroke();
+  g.font = `40px ${MONO}`; g.fillStyle = muted; g.fillText("Chief Humanoid Inspector", 240, 3220);
+  // number and the place for the verification QR code, bottom right
+  g.textAlign = "right"; g.fillStyle = muted; g.font = `36px ${MONO}`; g.fillText("EARTHLING No.", W2 - 560, 3020);
+  g.fillStyle = ink; g.font = `900 72px ${HEAD}`; g.fillText(CERT.preview ? "PREVIEW" : String(r.number), W2 - 560, 3110);
+  g.textAlign = "left";
+  g.setLineDash([16, 12]); g.strokeStyle = muted; g.lineWidth = 4; g.strokeRect(W2 - 520, 2950, 280, 280); g.setLineDash([]);
+  centerText(g, "QR", W2 - 380, 3080, `700 64px ${HEAD}`, muted);
+  centerText(g, "verify", W2 - 380, 3140, `34px ${MONO}`, muted);
+  // footer: the real fact
+  centerText(g, "Any two people on Earth share about 99.9% of their DNA.", W2 / 2, 3275, `40px ${MONO}`, muted);
+  centerText(g, "Are You Alien? · humanoid detector · for fun only", W2 / 2, 3335, `34px ${MONO}`, muted);
+  // the red stamp, over the photo's lower right corner
+  g.save(); g.translate(px + pw - 140, py + ph - 230); g.rotate(-12 * Math.PI / 180);
+  g.globalAlpha = 0.88; g.strokeStyle = stamp; g.fillStyle = stamp; g.lineWidth = 14;
+  g.beginPath(); g.roundRect(-430, -150, 860, 300, 30); g.stroke();
+  g.lineWidth = 4; g.beginPath(); g.roundRect(-400, -122, 800, 244, 20); g.stroke();
+  g.textAlign = "center"; g.font = `900 92px ${HEAD}`; g.fillText("CERTIFIED", 0, -10); g.font = `900 92px ${HEAD}`; g.fillText("EARTHLING", 0, 95);
+  g.restore();
+  // preview watermark
+  if (CERT.preview) {
+    g.save(); g.translate(W2 / 2, H2 / 2); g.rotate(-30 * Math.PI / 180);
+    g.fillStyle = "rgba(176,50,31,.13)"; g.textAlign = "center"; g.font = `900 400px ${HEAD}`; g.fillText("PREVIEW", 0, 140);
+    g.restore();
+  }
+  return c;
+}
+async function saveCertificate() {
+  if (!window.jspdf) { toast("The PDF maker didn’t load — check the connection and reload"); return; }
+  toast("Preparing the certificate…");
+  try {
+    const c = await renderCertificate(result);
+    const pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    pdf.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 210, 297);
+    const blob = pdf.output("blob");
+    const filename = `earthling_certificate_${CERT.preview ? "preview" : result.number}.pdf`;
+    const d = await downloads;
+    if (d) {
+      try { await d.save({ filename, data: blob }); toast("Certificate saved"); return; }
+      catch (e) { if (e && (e.code === "declined" || e.code === "rate_limited")) return; }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { console.error(e); toast("Couldn’t prepare the certificate"); }
 }
 
 /* ======================= Start ======================= */
