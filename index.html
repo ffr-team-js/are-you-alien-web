@@ -222,7 +222,7 @@ main{max-width:620px;margin:0 auto}
         <span><span class="k">Source</span><i class="dot" id="srcDot"></i><span id="srcTxt">not chosen</span></span>
         <span><span class="k">Detector</span><i class="dot wait" id="detDot"></i><span id="detTxt">loading</span></span>
       </div>
-      <p class="hint">Only the person whose face is in the frame gets scanned: aim it at them and move closer until the frame turns green. During the scan the subject had better not freeze — blink, smile or say something.</p>
+      <p class="hint">Only the person whose face is in the frame gets scanned: aim it at them and move closer until the frame turns green. During the scan the subject had better not freeze — turn their head, smile or say something.</p>
     </div>
     <input type="file" id="file" accept="image/*" hidden>
   </section>
@@ -230,7 +230,7 @@ main{max-width:620px;margin:0 auto}
   <section id="about" class="view" hidden>
     <h2 class="pagehead" style="margin:0">About</h2>
     <h2>What this is</h2>
-    <p>“Are You Alien?” is an entertainment app. The “detector” only checks whether there is a human face in the frame: if there is, and it’s big enough, you’re looking at a human. Faces in a crowd, on posters and at the edges of the picture are not scanned. With the camera, the device looks for signs of life: blinking, smiling, lip and head movement. If the subject doesn’t move a muscle during the scan, the device still recognises a human — just a very calm one. Match percentages are picked at random, while “traces” of Nordics and Greys depend on hair and eye colour and on dark glasses. Faces without living skin colour — marble statues, for example — don’t count as people.</p>
+    <p>“Are You Alien?” is an entertainment app. The “detector” only checks whether there is a human face in the frame: if there is, and it’s big enough, you’re looking at a human. Faces in a crowd, on posters and at the edges of the picture are not scanned. With the camera, the device looks for signs of life: smiling, talking and head movement. If the subject doesn’t move a muscle during the scan, the device still recognises a human — just a very calm one. Match percentages are picked at random, while “traces” of Nordics and Greys depend on hair and eye colour and on dark glasses. Faces without living skin colour — marble statues, for example — don’t count as people.</p>
     <h2>Privacy</h2>
     <p>Face detection runs right here in your browser: camera images and chosen photos are processed on your device and are never uploaded anywhere. A report leaves your device only if you tap “Share” and choose to save or send it.</p>
     <h2>Case files</h2>
@@ -367,7 +367,6 @@ const JOKES = {
   ],
 };
 const SIGNS = {
-  BLINK: "Blinked on their own, no reminder needed. Statues can’t do that.",
   SMILE: "Smiled without being asked. The device is flattered.",
   TALK: "Said something during the scan. The device wasn’t eavesdropping, honest.",
   MOVE: "Couldn’t sit still for a second. Very much alive.",
@@ -428,66 +427,6 @@ class Flicker {
     if (this.swings > 3 || (this.n >= 10 && this.undecided > this.n * 0.4)) this.noisy = true;
   }
 }
-/**
- * Blink, measured against the person's own eyes. Openness comes from eyelid geometry
- * (eye aspect ratio), so through glasses or on a statue it's the shape that counts.
- * At 6–8 frames a second a frame rarely lands on fully shut eyes, so a blink counts when both
- * eyes drop together to below 60% of their usual level. Lopsided readings (one eye "shut" — a
- * typical glitch on a statue) are ignored; too many dips, or eyes disagreeing in over a quarter
- * of frames, means they can't be read. With confidently open eyes one blink counts; otherwise
- * a slow camera needs two. Tolerances are relative to the person's level.
- */
-class BlinkWatch {
-  /** relative: the signal's scale is unknown (eye-image contrast) — only changes against the person's own level count */
-  constructor(relative = false) { this.relative = relative; Object.assign(this, { history: [], dips: [], frame: 0, dipping: false, seen: 0, lopsided: 0, inClosure: false, closureLen: 0, shutFrames: 0, reopen: 0, level: 0, events: 0, noisy: false, needed: 1 }); }
-  shut(l, r) { return l < this.level * 0.6 && r < this.level * 0.6 && Math.abs(l - r) < this.level * 0.25; }
-  add(l, r, fps) {
-    this.frame++;
-    if (l == null || r == null) { this.inClosure = false; return false; }
-    const avg = (l + r) / 2;
-    this.seen++;
-    if (Math.abs(l - r) > (this.relative ? (this.level || avg) * 0.35 : Math.max(0.35, this.level * 0.35))) this.lopsided++;
-    if (this.seen >= 10 && this.lopsided > this.seen / 4) this.noisy = true;
-    if (!this.inClosure) {
-      if (this.history.length >= perSec(fps, 0.6, 4)) {
-        this.level = [...this.history].sort((a, b) => a - b)[Math.floor(this.history.length * 3 / 4)];
-        const calm = this.history.slice(0, -2).slice(-Math.min(5, perSec(fps, 0.4, 2))).every(v => Math.abs(v - this.level) < this.level * 0.15);
-        const levelOk = this.relative ? this.level > 0.02 : this.level >= 0.4;
-        const down = levelOk && avg < this.level * 0.7;
-        if (down && !this.dipping) {
-          this.dips.push(this.frame);
-          while (this.dips.length && this.frame - this.dips[0] > perSec(fps, 2.7, 8)) this.dips.shift();
-          if (this.dips.length > 4) this.noisy = true;
-        }
-        this.dipping = down;
-        const quiet = !this.dips.some(d => d >= this.frame - perSec(fps, 1.1, 3) && d <= this.frame - perSec(fps, 0.2, 1));
-        if (levelOk && calm && quiet && !this.noisy && this.shut(l, r)) {
-          this.inClosure = true; this.closureLen = 1; this.shutFrames = 1; this.reopen = 0;
-          return false;
-        }
-      }
-      const agree = this.relative ? Math.abs(l - r) < (this.level || avg) * 0.2 : Math.abs(l - r) < Math.max(0.2, this.level * 0.2);
-      if (agree) { this.history.push(avg); if (this.history.length > perSec(fps, 1.4, 8)) this.history.shift(); }
-      return false;
-    }
-    this.closureLen++;
-    this.dipping = avg < this.level * 0.7;
-    if (this.shut(l, r)) { this.shutFrames++; this.reopen = 0; }
-    else if (l > this.level * 0.82 && r > this.level * 0.82) {
-      this.reopen++;
-      if (this.reopen >= 2) {
-        this.inClosure = false;
-        if (this.noisy) return false;
-        const confident = this.relative || this.level >= 0.85;
-        this.needed = (confident || fps >= 12) ? 1 : 2;
-        if (confident || this.shutFrames >= (fps >= 12 ? 2 : 1)) this.events++;
-        return this.events >= this.needed;
-      }
-    }
-    if (this.closureLen > Math.max(4, Math.floor(fps * 0.4) + 2)) this.inClosure = false;
-    return false;
-  }
-}
 /** Talking: lips keep parting — many readings 14% above the mouth's "closed" level (face-api's mouth points jitter more than ML Kit's). */
 class TalkWatch {
   constructor() { this.last = []; this.best = 0; this.need = 8; }
@@ -504,39 +443,20 @@ class TalkWatch {
   }
 }
 /**
- * Passive check during the scan: a blink, a smile (score AND a wider mouth), talking or a clear
- * head turn/nod means the subject is alive. Head thresholds are a little higher than in the
- * Android app: landmark-based head angles are noisier than ML Kit's.
+ * Passive check during the scan: a smile (score AND a wider mouth), talking or a clear head
+ * turn/nod means the subject is alive. No blinks in the web version: face-api's eyelid points
+ * barely move when a person blinks, and at 6–9 frames a second the eye image didn't show it
+ * either — tested on real phones. Head thresholds are a little higher than in the Android app:
+ * landmark-based head angles are noisier than ML Kit's.
  */
 class LifeSigns {
-  constructor() { this.frames = 0; this.eyeLows = []; this.minL = 9; this.minR = 9; this.blink = new BlinkWatch(); this.blinkC = new BlinkWatch(true); this.cLows = []; this.cMinL = 9; this.cMinR = 9;
-    this.cHistL = []; this.cHistR = []; this.trace = []; this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
+  constructor() { this.frames = 0; this.score = new Track(); this.width = new Track(); this.flicker = new Flicker(0.35, 0.65); this.talk = new TalkWatch(); this.yaw = new Track(); this.pitch = new Track(); }
   feed(r) {
     this.frames++;
-    if (r.leftEye != null && r.rightEye != null) { // for ?debug: how far the eyes closed during the scan
-      this.minL = Math.min(this.minL, r.leftEye); this.minR = Math.min(this.minR, r.rightEye);
-      this.eyeLows.push((r.leftEye + r.rightEye) / 2); this.eyeLows.sort((a, b) => a - b); this.eyeLows.length = Math.min(this.eyeLows.length, 3);
-    }
-    // Each eye's image contrast is taken relative to that eye's own usual level: one eye is often
-    // darker than the other (side light, a glasses frame), and only a drop of both counts.
-    let nl = null, nr = null;
-    if (r.leftC != null && r.rightC != null) {
-      const win = perSec(r.fps, 2, 10), q = h => [...h].sort((a, b) => a - b)[Math.floor(h.length * 0.75)];
-      this.cHistL.push(r.leftC); this.cHistR.push(r.rightC);
-      while (this.cHistL.length > win) { this.cHistL.shift(); this.cHistR.shift(); }
-      const bl = q(this.cHistL), br = q(this.cHistR);
-      if (bl > 0 && br > 0) { nl = r.leftC / bl; nr = r.rightC / br; }
-      this.cMinL = Math.min(this.cMinL, r.leftC); this.cMinR = Math.min(this.cMinR, r.rightC);
-      if (nl != null) { this.cLows.push((nl + nr) / 2); this.cLows.sort((a, b) => a - b); this.cLows.length = Math.min(this.cLows.length, 3); }
-    }
-    this.trace.push([nl, nr, r.leftEye, r.rightEye]); // for the ?debug chart
-    const blinked = this.blink.add(r.leftEye, r.rightEye, r.fps) |
-      (nl != null && this.cHistL.length >= 4 ? this.blinkC.add(nl, nr, r.fps) : false);
     if (r.smile != null) { this.score.add(r.smile); this.flicker.add(r.smile); }
     if (r.mouthWidth != null) this.width.add(r.mouthWidth);
     const talking = r.mouth != null ? this.talk.add(r.mouth, r.fps) : false;
     this.yaw.add(r.yaw); this.pitch.add(r.pitch);
-    if (blinked) return "BLINK";
     if (this.frames < perSec(r.fps, 0.6, 4)) return null;
     if (talking) return "TALK";
     if (this.yaw.range > 9 || this.pitch.range > 8) return "MOVE";
@@ -545,43 +465,11 @@ class LifeSigns {
         this.score.range > 0.35 && this.score.value > 0.6 && widened > 0.09) return "SMILE";
     return null;
   }
-  /** One line for the ?debug overlay: how close each sign got. */
-  debug() {
-    const b = this.blink;
-    const c = this.blinkC;
-    return `eyes min L ${this.minL.toFixed(2)} R ${this.minR.toFixed(2)} · lowest avg ${this.eyeLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(b.level * 0.6).toFixed(2)}\nimage (each eye vs its own level): lvl ${c.level.toFixed(2)} · lowest ${this.cLows.map(v => v.toFixed(2)).join(" ")} · shut below ${(c.level * 0.6).toFixed(2)} · blinks ${c.events}${c.noisy ? " NOISY" : ""} · raw min L ${this.cMinL.toFixed(3)} R ${this.cMinR.toFixed(3)}\nblink ${b.events}/${b.needed} lvl ${b.level.toFixed(2)}${b.noisy ? " NOISY" : ""} · yawΔ ${this.yaw.range.toFixed(1)}/9 pitchΔ ${this.pitch.range.toFixed(1)}/8 · talk ${this.talk.best}/${this.talk.need} · smileΔ ${this.score.range.toFixed(2)}`;
-  }
 }
 
 /* ======================= Faces from face-api results ======================= */
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mean = pts => ({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length });
-/**
- * Eye openness from the eye aspect ratio of six eyelid points: about 1 for a typical open eye,
- * 0 for shut. Not capped at 1 — wide-open eyes read above 1, and a capped scale hid half-closed
- * eyes during a blink (they still read 1.00). Blinks are judged against each person's own level.
- */
-function openness(p) {
-  const ear = (dist(p[1], p[5]) + dist(p[2], p[4])) / (2 * dist(p[0], p[3]));
-  return Math.max(0, Math.min(2, ear / 0.28));
-}
-/**
- * Eye-image contrast: an open eye has white sclera next to a dark iris and pupil, a shut eye is
- * an even eyelid. face-api's eyelid points hardly move when a person blinks (they keep drawing an
- * open eye), but this contrast drops sharply. Coefficient of variation of brightness in a box
- * around the eye centre, so it doesn't change with exposure.
- */
-function eyeContrast(ctx, c, w) {
-  const hw = Math.max(3, w * 0.35), hh = Math.max(2, w * 0.22);
-  const x0 = Math.max(0, Math.round(c.x - hw)), y0 = Math.max(0, Math.round(c.y - hh));
-  const bw = Math.min(ctx.canvas.width - x0, Math.round(hw * 2)), bh = Math.min(ctx.canvas.height - y0, Math.round(hh * 2));
-  if (bw < 4 || bh < 3) return null;
-  const d = ctx.getImageData(x0, y0, bw, bh).data;
-  let n = 0, s = 0, s2 = 0;
-  for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; s += l; s2 += l * l; n++; }
-  const m = s / n;
-  return Math.sqrt(Math.max(0, s2 / n - m * m)) / (m + 10);
-}
 /** Everything the checks need about one detected face, in the coordinates of the analysed picture. */
 function toSignal(res) {
   const b = res.detection.box;
@@ -596,9 +484,6 @@ function toSignal(res) {
     box: { x: b.x, y: b.y, w: b.width, h: b.height },
     score: res.detection.score,
     leftEyeC: lc, rightEyeC: rc,
-    leftEye: openness(le), rightEye: openness(re),
-    eyeWL: dist(p[36], p[39]), eyeWR: dist(p[42], p[45]),
-    leftC: null, rightC: null, // eye-image contrast, filled in by the camera loop
     smile: res.expressions ? res.expressions.happy : null,
     mouth: eyes > 1 ? dist(p[33], p[57]) / eyes : null,
     mouthWidth: eyes > 1 ? dist(p[48], p[54]) / eyes : null,
@@ -927,9 +812,6 @@ let modelReady = false, modelFailed = false;
 let scanning = false, scanStart = 0, result = null, photoFaces = [], scanGen = 0;
 let live = null, liveSeq = 0, fps = 0, camGen = 0;
 let W = 0, H = 0, DPR = 1, xf = null;
-/** Open the page with ?debug to see frame rate and what the detector sees (for testing on phones). */
-const DEBUG = new URLSearchParams(location.search).has("debug");
-const dbg = { frames: 0, watch: null, sign: null };
 
 function setStatus(dot, txt, cls, text) { $(dot).className = "dot " + cls; $(txt).textContent = text; }
 function updateUI() {
@@ -974,16 +856,11 @@ async function detectFaces(input, kind, withExpressions = true) {
 const nextPaint = () => new Promise(r => requestAnimationFrame(() => r()));
 async function detectLoop(gen) {
   let prev = [], last = 0, n = 0;
-  // the frame is copied once: landmarks and the eye images then come from exactly the same picture
-  const fc = document.createElement("canvas"), fctx = fc.getContext("2d", { willReadFrequently: true });
   while (gen === camGen && stream && source === "camera") {
     if (modelReady && video.readyState >= 2 && video.videoWidth) {
       try {
         const withExpr = n++ % 3 === 0;
-        if (fc.width !== video.videoWidth || fc.height !== video.videoHeight) { fc.width = video.videoWidth; fc.height = video.videoHeight; }
-        fctx.drawImage(video, 0, 0, fc.width, fc.height);
-        const faces = await detectFaces(fc, lensFront ? "near" : "far", withExpr);
-        for (const f of faces) { f.leftC = eyeContrast(fctx, f.leftEyeC, f.eyeWL); f.rightC = eyeContrast(fctx, f.rightEyeC, f.eyeWR); }
+        const faces = await detectFaces(video, lensFront ? "near" : "far", withExpr);
         assignIds(prev, faces);
         // keep the last smile score of the same face on frames without the expression model
         if (!withExpr) for (const f of faces) { const p = prev.find(q => q.id === f.id); f.smile = p ? p.smile : null; }
@@ -1245,47 +1122,10 @@ function frame(t) {
       : f.lock === "TOO_FAR" ? ["MOVE CLOSER", "#ffb54d", false] : ["AIM THE FRAME AT A FACE", "#dff6ff", false];
     if (steady || Math.floor(t / 700) % 2 === 0) { ctx.textBaseline = "top"; text(label, 14 * DPR, 14 * DPR, 12, col); ctx.textBaseline = "alphabetic"; }
   }
-  if (DEBUG) debugPanel();
   const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.75);
   vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.65)");
   ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
   requestAnimationFrame(frame);
-}
-
-/** ?debug: live numbers in a box under the TV, so they stay visible under the verdict too. */
-let dbgBox = null, dbgPre = null, dbgChart = null, dbgTraceLen = -1;
-function debugPanel() {
-  if (!dbgBox) {
-    dbgBox = document.createElement("div");
-    dbgBox.style.cssText = "margin:10px 0 0;padding:8px 10px;background:#0a0e0d;color:#c8ffd2;border-radius:6px";
-    dbgPre = document.createElement("pre");
-    dbgPre.style.cssText = "margin:0;font:11px/1.45 'PT Mono',monospace;white-space:pre-wrap";
-    dbgChart = document.createElement("canvas");
-    dbgChart.style.cssText = "width:100%;height:90px;margin-top:6px;display:block";
-    dbgBox.append(dbgPre, dbgChart);
-    document.querySelector(".tv").after(dbgBox);
-  }
-  const lines = [`fps ${fps.toFixed(1)}  faces ${live ? live.faces.length : 0}  video ${video.videoWidth}x${video.videoHeight}`];
-  if (stream) lines.push(`camera: ${stream.getVideoTracks()[0].label || "?"}`);
-  const f = live && live.faces[0];
-  if (f) lines.push(`score ${f.score.toFixed(2)}  eyes ${f.leftEye.toFixed(2)}/${f.rightEye.toFixed(2)}  img ${f.leftC == null ? "-" : f.leftC.toFixed(3)}/${f.rightC == null ? "-" : f.rightC.toFixed(3)}  yaw ${f.yaw.toFixed(0)}  pitch ${f.pitch.toFixed(0)}`);
-  if (dbg.watch) { lines.push(`last scan: frames ${dbg.frames}  sign ${dbg.sign || "-"}`); lines.push(dbg.watch.debug()); }
-  const t = lines.join("\n");
-  if (dbgPre.textContent !== t) dbgPre.textContent = t;
-  // chart of the last scan: each eye's image contrast vs its own level (1.0 = usual), and the shut line
-  const tr = dbg.watch ? dbg.watch.trace : [];
-  if (tr.length !== dbgTraceLen) {
-    dbgTraceLen = tr.length;
-    const c = dbgChart, w = c.width = c.clientWidth * 2, h = c.height = 180, g = c.getContext("2d");
-    g.fillStyle = "#0a0e0d"; g.fillRect(0, 0, w, h);
-    const y = v => h - 8 - (Math.min(1.4, Math.max(0, v)) / 1.4) * (h - 16);
-    g.strokeStyle = "rgba(255,181,77,.8)"; g.setLineDash([6, 6]); g.beginPath(); g.moveTo(0, y(0.6)); g.lineTo(w, y(0.6)); g.stroke(); g.setLineDash([]);
-    g.strokeStyle = "rgba(200,255,210,.25)"; g.beginPath(); g.moveTo(0, y(1)); g.lineTo(w, y(1)); g.stroke();
-    const line = (k, col) => { g.strokeStyle = col; g.lineWidth = 3; g.beginPath(); let started = false;
-      tr.forEach((p, i) => { const v = p[k]; if (v == null) return; const x = tr.length > 1 ? i / (tr.length - 1) * w : 0; started ? g.lineTo(x, y(v)) : g.moveTo(x, y(v)); started = true; }); g.stroke(); };
-    line(0, "#7dffb0"); line(1, "#5ec8ff");
-    g.fillStyle = "#c8ffd2"; g.font = "20px monospace"; g.fillText("eye image: L green, R blue · dashed = shut line", 8, 22);
-  }
 }
 
 /* ======================= Scan ======================= */
@@ -1313,7 +1153,6 @@ async function startScan() {
       while (now() - scanStart < SCAN_MS) await sleep(50);
     } else {
       let lastSeq = -1, hits = 0, maxSubjects = 0, frames = 0;
-      dbg.frames = 0; dbg.watch = null; dbg.sign = null;
       const watches = new Map(); // every face in the frame is watched: in a group, one blink or smile is enough
       // the current camera frame, to check each find for skin tones (an icon is not a face)
       const vc = document.createElement("canvas"), vg = vc.getContext("2d", { willReadFrequently: true });
@@ -1328,13 +1167,11 @@ async function startScan() {
           const subj = subjectIndices(rects, target, !lensFront).filter(i => realFaces(vg, [L.faces[i]]).length === 1);
           if (subj.length) {
             hits++; maxSubjects = Math.max(maxSubjects, subj.length);
-            if (DEBUG) { dbg.frames = frames; }
             for (const i of subj) {
               const f = L.faces[i];
               if (!watches.has(f.id)) watches.set(f.id, new LifeSigns());
               const s = watches.get(f.id).feed({ ...f, fps: fps || 10 });
               if (!sign && s) sign = s;
-              if (DEBUG && i === subj[0]) { dbg.watch = watches.get(f.id); dbg.sign = sign; }
             }
           }
         }
