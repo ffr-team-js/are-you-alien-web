@@ -1284,12 +1284,12 @@ function showResult() {
     ${r.joke ? `<p class="joke">${esc(r.joke)}</p>` : ""}
     <div class="ractions">
       <button class="outline" id="again">Again</button>
-      ${r.verdict === "HUMAN" && r.shot ? `<button class="outline" id="cert">Certificate</button>` : ""}
       ${canShare ? `<button class="outline" id="share" aria-haspopup="true">Share</button>
       <div class="sharemenu" id="shareMenu" hidden role="menu">
         <button role="menuitem" id="saveImg">Save image</button>
         ${navigator.share ? `<button role="menuitem" id="sendImg">Send</button>` : ""}
       </div>` : ""}
+      ${r.verdict === "HUMAN" && r.shot ? `<button class="outline" id="cert">Certificate</button>` : ""}
     </div>
     ${r.verdict === "HUMAN" && r.shot ? `<p class="consent">Before saving a certificate, make sure everyone in the photo is happy to be on it.</p>` : ""}`;
   $("#result").hidden = false;
@@ -1536,12 +1536,6 @@ async function renderCertificate(r) {
   g.lineWidth = 4; g.beginPath(); g.roundRect(-400, -122, 800, 244, 20); g.stroke();
   g.textAlign = "center"; g.font = `900 92px ${HEAD}`; g.fillText("CERTIFIED", 0, -10); g.font = `900 92px ${HEAD}`; g.fillText("EARTHLING", 0, 95);
   g.restore();
-  // preview watermark
-  if (CERT.preview) {
-    g.save(); g.translate(W2 / 2, H2 / 2); g.rotate(-30 * Math.PI / 180);
-    g.fillStyle = "rgba(176,50,31,.13)"; g.textAlign = "center"; g.font = `900 400px ${HEAD}`; g.fillText("PREVIEW", 0, 140);
-    g.restore();
-  }
   return c;
 }
 async function saveCertificate() {
@@ -1552,7 +1546,7 @@ async function saveCertificate() {
     const pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     pdf.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 210, 297);
     const blob = pdf.output("blob");
-    const filename = `earthling_certificate_${CERT.preview ? "preview" : certNumber(result.number)}.pdf`;
+    const filename = `earthling_certificate_${CERT.preview ? "EA" : certNumber(result.number)}.pdf`;
     const d = await downloads;
     if (d) {
       try { await d.save({ filename, data: blob }); toast("Certificate saved"); return; }
